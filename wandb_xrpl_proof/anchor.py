@@ -1,3 +1,4 @@
+
 """
 @xrpl_anchor decorator for wandb-xrpl-proof.
 
@@ -28,12 +29,11 @@ from wandb_xrpl_proof.canonicalize import canonicalize
 from wandb_xrpl_proof.hash import compute_hash
 from wandb_xrpl_proof.ipfs import upload_to_ipfs
 from wandb_xrpl_proof.merkle import build_merkle_tree
-from wandb_xrpl_proof.xrpl_client import submit_anchor
+from wandb_xrpl_proof.xrpl_client import XRPL_TESTNET_URL, submit_anchor
 
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = "wandb-xrpl-proof-0.2"
-MEMO_SCHEMA_VERSION = "wandb-xrpl-proof-0.2"
 
 
 def xrpl_anchor(
@@ -69,7 +69,19 @@ def xrpl_anchor(
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             nonlocal _atexit_registered
-            result = func(*args, **kwargs)
+
+            # Weave op (.call 属性を持つ) なら call() で実行してトレース ID を取得する
+            weave_call_id: str | None = None
+            weave_ui_url: str | None = None
+            if hasattr(func, "call"):
+                result, weave_call = func.call(*args, **kwargs)
+                try:
+                    weave_call_id = str(weave_call.id)
+                    weave_ui_url = weave_call.ui_url
+                except Exception:
+                    pass
+            else:
+                result = func(*args, **kwargs)
 
             if mode == "per_op":
                 _anchor_current_run(
@@ -82,6 +94,8 @@ def xrpl_anchor(
                     xrpl_seed_env=xrpl_seed_env,
                     xrpl_node_env=xrpl_node_env,
                     ipfs_api_env=ipfs_api_env,
+                    weave_call_id=weave_call_id,
+                    weave_ui_url=weave_ui_url,
                 )
 
             elif mode == "per_run" and not _atexit_registered:
@@ -120,34 +134,27 @@ def _anchor_current_run(
     xrpl_seed_env: str,
     xrpl_node_env: str,
     ipfs_api_env: str,
+    run: "wandb.sdk.wandb_run.Run | None" = None,
+    weave_call_id: str | None = None,
+    weave_ui_url: str | None = None,
 ) -> None:
     """現在の W&B run をアンカリングする。失敗しても例外を伝播しない (Section 13)。"""
+    target_run = run or wandb.run
     try:
-        run = wandb.run
-        if run is None:
+        if target_run is None:
             logger.warning("xrpl_anchor: No active W&B run. Skipping anchor.")
             return
 
-        wandb_run_path = f"{run.entity}/{run.project}/{run.id}"
-
         # ペイロード組み立て (Section 4)
-        payload: dict = {
-            "schema_version": SCHEMA_VERSION,
-            "wandb_run_path": wandb_run_path,
-            "weave_op_name": op_name,
-        }
-
-        if include_summary and run.summary:
-            summary = dict(run.summary)
-            if summary_allowlist:
-                summary = {k: v for k, v in summary.items() if k in summary_allowlist}
-            payload["summary"] = summary
-
-        if include_config and run.config:
-            config = dict(run.config)
-            if config_allowlist:
-                config = {k: v for k, v in config.items() if k in config_allowlist}
-            payload["config"] = config
+        payload = build_payload(
+            run=target_run,
+            op_name=op_name,
+            include_summary=include_summary,
+            include_config=include_config,
+            summary_allowlist=summary_allowlist,
+            config_allowlist=config_allowlist,
+            weave_call_id=weave_call_id,
+        )
 
         # 正規化 & ハッシュ (Section 5, 6)
         canonical = canonicalize(payload)
@@ -160,8 +167,9 @@ def _anchor_current_run(
             cid = upload_to_ipfs(payload, api_url=ipfs_url)
 
         # XRPL Memo 組み立て (Section 9)
+        wandb_run_path: str = payload["wandb_run_path"]
         memo: dict = {
-            "schema_version": MEMO_SCHEMA_VERSION,
+            "schema_version": SCHEMA_VERSION,
             "wandb_run_path": wandb_run_path,
             "commit_hash": commit_hash,
         }
@@ -172,20 +180,19 @@ def _anchor_current_run(
         seed = os.environ.get(xrpl_seed_env)
         if not seed:
             logger.error("xrpl_anchor: %s not set. Skipping XRPL submission.", xrpl_seed_env)
-            run.summary["xrpl_anchor_error"] = f"{xrpl_seed_env} not configured"
+            target_run.summary["xrpl_anchor_error"] = f"{xrpl_seed_env} not configured"
             return
 
-        node_url_from_env = os.environ.get(xrpl_node_env)
-        from wandb_xrpl_proof.xrpl_client import XRPL_TESTNET_URL
-        node_url = node_url_from_env or XRPL_TESTNET_URL
-
+        node_url = os.environ.get(xrpl_node_env) or XRPL_TESTNET_URL
         tx_hash = submit_anchor(wallet_seed=seed, memo=memo, network_url=node_url)
 
         # tx_hash を run.summary に書き込み (Section 10, step 8)
-        run.summary["xrpl_tx_hash"] = tx_hash
-        run.summary["xrpl_commit_hash"] = commit_hash
+        target_run.summary["xrpl_tx_hash"] = tx_hash
+        target_run.summary["xrpl_commit_hash"] = commit_hash
         if cid:
-            run.summary["ipfs_cid"] = cid
+            target_run.summary["ipfs_cid"] = cid
+        if weave_ui_url:
+            target_run.summary["weave_trace_url"] = weave_ui_url
 
         logger.info("xrpl_anchor: Anchored run=%s tx_hash=%s", wandb_run_path, tx_hash)
 
@@ -193,8 +200,8 @@ def _anchor_current_run(
         # Section 13: XRPL 失敗はクラッシュしない
         logger.error("xrpl_anchor: Anchoring failed: %s", exc, exc_info=True)
         try:
-            if wandb.run:
-                wandb.run.summary["xrpl_anchor_error"] = str(exc)
+            if target_run:
+                target_run.summary["xrpl_anchor_error"] = str(exc)
         except Exception:
             pass
 
@@ -207,6 +214,7 @@ def build_payload(
     summary_allowlist: list[str] | None = None,
     config_allowlist: list[str] | None = None,
     history_chunks: list[dict] | None = None,
+    weave_call_id: str | None = None,
 ) -> dict:
     """
     W&B run からアンカリングペイロードを組み立てる。
@@ -221,6 +229,7 @@ def build_payload(
         summary_allowlist: 含める summary キー (None = 全て)
         config_allowlist: 含める config キー (None = 全て)
         history_chunks: Merkle ツリー用の history チャンク
+        weave_call_id: Weave トレース call ID (文字列、省略可)
 
     Returns:
         正規化前のペイロード辞書
@@ -231,6 +240,8 @@ def build_payload(
         "wandb_run_path": wandb_run_path,
         "weave_op_name": op_name,
     }
+    if weave_call_id:
+        payload["weave_call_id"] = weave_call_id
 
     if include_summary and run.summary:
         summary = dict(run.summary)
@@ -250,7 +261,6 @@ def build_payload(
         payload["chunk_count"] = merkle_result["chunk_count"]
 
     return payload
-
 
 def anchor_run_end(
     run: "wandb.sdk.wandb_run.Run | None" = None,
@@ -292,8 +302,6 @@ def anchor_run_end(
         logger.warning("anchor_run_end: No active W&B run. Skipping.")
         return
 
-    # wandb.run を一時的に target_run として扱うため、_anchor_current_run を直接呼ぶ前に
-    # run が wandb.run と異なる場合はペイロードを直接組み立てる
     _anchor_current_run(
         op_name=op_name,
         include_summary=include_summary,
@@ -304,4 +312,5 @@ def anchor_run_end(
         xrpl_seed_env=xrpl_seed_env,
         xrpl_node_env=xrpl_node_env,
         ipfs_api_env=ipfs_api_env,
+        run=target_run,
     )

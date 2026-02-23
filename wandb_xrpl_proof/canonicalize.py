@@ -13,6 +13,28 @@ import json
 # 仕様 Section 5: 除外すべき不安定フィールド
 _UNSTABLE_FIELDS = frozenset({"_timestamp", "_runtime"})
 
+# ML ログに誤って混入しやすい PII フィールド名のデフォルトセット。
+# canonicalize(obj, exclude_keys=DEFAULT_PII_KEYS) として使用する。
+# 独自フィールドを追加したい場合: DEFAULT_PII_KEYS | {"my_field"}
+DEFAULT_PII_KEYS: frozenset[str] = frozenset({
+    # 氏名・識別子
+    "name", "first_name", "last_name", "full_name",
+    "username", "user_id", "user_name",
+    # 連絡先
+    "email", "email_address", "phone", "phone_number",
+    "address", "street_address",
+    # 地理情報
+    "city", "state", "zip", "zip_code", "postal_code", "country",
+    # 個人情報
+    "dob", "date_of_birth", "birthday", "age", "gender",
+    "ssn", "national_id",
+    # ネットワーク
+    "ip", "ip_address",
+    # 認証情報
+    "password", "token", "secret", "api_key",
+    "access_token", "refresh_token",
+})
+
 
 def canonicalize(obj: dict, exclude_keys: set[str] | None = None) -> str:
     """
