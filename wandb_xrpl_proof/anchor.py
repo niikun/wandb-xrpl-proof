@@ -46,6 +46,7 @@ def xrpl_anchor(
     xrpl_seed_env: str = "XRPL_WALLET_SEED",
     xrpl_node_env: str = "XRPL_NODE_URL",
     ipfs_api_env: str = "IPFS_API_URL",
+    save_payload_path: str | None = None,
 ) -> Callable:
     """
     Weave op を XRPL にアンカリングするデコレータ。
@@ -60,6 +61,8 @@ def xrpl_anchor(
         xrpl_seed_env: XRPL シードを保持する環境変数名
         xrpl_node_env: XRPL ノード URL の環境変数名
         ipfs_api_env: IPFS API URL の環境変数名
+        save_payload_path: ペイロードを保存する JSON ファイルパス。
+            指定すると IPFS なしで verify_demo.py --payload で検証できる。
     """
 
     def decorator(func: Callable) -> Callable:
@@ -109,6 +112,7 @@ def xrpl_anchor(
                     weave_ui_url=weave_ui_url,
                     weave_input_hash=weave_input_hash,
                     weave_output_hash=weave_output_hash,
+                    save_payload_path=save_payload_path,
                 )
 
             elif mode == "per_run" and not _atexit_registered:
@@ -127,6 +131,7 @@ def xrpl_anchor(
                     xrpl_seed_env=xrpl_seed_env,
                     xrpl_node_env=xrpl_node_env,
                     ipfs_api_env=ipfs_api_env,
+                    save_payload_path=save_payload_path,
                 )
                 _atexit_registered = True
 
@@ -152,6 +157,7 @@ def _anchor_current_run(
     weave_ui_url: str | None = None,
     weave_input_hash: str | None = None,
     weave_output_hash: str | None = None,
+    save_payload_path: str | None = None,
 ) -> None:
     """現在の W&B run をアンカリングする。失敗しても例外を伝播しない (Section 13)。"""
     target_run = run or wandb.run
@@ -210,6 +216,16 @@ def _anchor_current_run(
             target_run.summary["ipfs_cid"] = cid
         if weave_ui_url:
             target_run.summary["weave_trace_url"] = weave_ui_url
+
+        # ペイロードをローカルファイルに保存 (IPFS なしで検証するため)
+        if save_payload_path:
+            import json as _json
+            try:
+                with open(save_payload_path, "w", encoding="utf-8") as f:
+                    _json.dump(payload, f, ensure_ascii=False, indent=2)
+                logger.info("xrpl_anchor: Payload saved to %s", save_payload_path)
+            except Exception as exc:
+                logger.warning("xrpl_anchor: Failed to save payload to %s: %s", save_payload_path, exc)
 
         logger.info("xrpl_anchor: Anchored run=%s tx_hash=%s", wandb_run_path, tx_hash)
 
@@ -298,6 +314,7 @@ def anchor_run_end(
     xrpl_seed_env: str = "XRPL_WALLET_SEED",
     xrpl_node_env: str = "XRPL_NODE_URL",
     ipfs_api_env: str = "IPFS_API_URL",
+    save_payload_path: str | None = None,
 ) -> None:
     """
     run 終了時に明示的にアンカリングを行う関数。
@@ -316,11 +333,12 @@ def anchor_run_end(
         xrpl_seed_env: XRPL シードの環境変数名
         xrpl_node_env: XRPL ノード URL の環境変数名
         ipfs_api_env: IPFS API URL の環境変数名
+        save_payload_path: ペイロードを保存する JSON ファイルパス (IPFS 不要で検証するため)
 
     Example:
         with wandb.init(project="my-project") as run:
             train(run)
-            anchor_run_end(run, summary_allowlist=["loss"])
+            anchor_run_end(run, summary_allowlist=["loss"], save_payload_path="payload.json")
     """
     target_run = run or wandb.run
     if target_run is None:
@@ -338,4 +356,5 @@ def anchor_run_end(
         xrpl_node_env=xrpl_node_env,
         ipfs_api_env=ipfs_api_env,
         run=target_run,
+        save_payload_path=save_payload_path,
     )

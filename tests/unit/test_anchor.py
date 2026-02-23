@@ -195,3 +195,72 @@ class TestXrplAnchorWrapperWeaveHashes:
 
         _, kwargs = mock_anchor.call_args
         assert kwargs["weave_input_hash"] is None
+
+
+# ---------------------------------------------------------------------------
+# TestSavePayloadPath
+# ---------------------------------------------------------------------------
+
+class TestSavePayloadPath:
+    def test_payload_written_to_file(self, tmp_path):
+        """save_payload_path を指定するとペイロード JSON が書き込まれる。"""
+        import json
+        from wandb_xrpl_proof.anchor import _anchor_current_run
+
+        run = MagicMock()
+        run.entity = "e"
+        run.project = "p"
+        run.id = "r"
+        run.summary = {}
+        run.config = {}
+
+        out = tmp_path / "payload.json"
+
+        with patch("wandb_xrpl_proof.anchor.submit_anchor", return_value="TX" * 32):
+            with patch.dict("os.environ", {"XRPL_WALLET_SEED": "sTest"}):
+                _anchor_current_run(
+                    op_name="test_op",
+                    include_summary=False,
+                    include_config=False,
+                    use_ipfs=False,
+                    summary_allowlist=None,
+                    config_allowlist=None,
+                    xrpl_seed_env="XRPL_WALLET_SEED",
+                    xrpl_node_env="XRPL_NODE_URL",
+                    ipfs_api_env="IPFS_API_URL",
+                    run=run,
+                    save_payload_path=str(out),
+                )
+
+        assert out.exists()
+        payload = json.loads(out.read_text())
+        assert payload["weave_op_name"] == "test_op"
+        assert payload["wandb_run_path"] == "e/p/r"
+
+    def test_no_file_when_path_not_given(self, tmp_path):
+        """save_payload_path を省略するとファイルが作られない。"""
+        from wandb_xrpl_proof.anchor import _anchor_current_run
+
+        run = MagicMock()
+        run.entity = "e"
+        run.project = "p"
+        run.id = "r"
+        run.summary = {}
+        run.config = {}
+
+        with patch("wandb_xrpl_proof.anchor.submit_anchor", return_value="TX" * 32):
+            with patch.dict("os.environ", {"XRPL_WALLET_SEED": "sTest"}):
+                _anchor_current_run(
+                    op_name="test_op",
+                    include_summary=False,
+                    include_config=False,
+                    use_ipfs=False,
+                    summary_allowlist=None,
+                    config_allowlist=None,
+                    xrpl_seed_env="XRPL_WALLET_SEED",
+                    xrpl_node_env="XRPL_NODE_URL",
+                    ipfs_api_env="IPFS_API_URL",
+                    run=run,
+                )
+
+        assert list(tmp_path.iterdir()) == []

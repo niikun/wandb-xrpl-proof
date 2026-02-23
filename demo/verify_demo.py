@@ -32,7 +32,7 @@ import requests
 
 from wandb_xrpl_proof.canonicalize import canonicalize
 from wandb_xrpl_proof.hash import compute_hash
-from wandb_xrpl_proof.verify import verify_anchor, verify_chain
+from wandb_xrpl_proof.verify import verify_chain
 from wandb_xrpl_proof.xrpl_client import XRPL_TESTNET_URL, decode_memo, fetch_transaction
 
 W = 62
@@ -138,7 +138,13 @@ def _run_chain_verify(proof_path: Path, xrpl_node: str) -> None:
 # 単一アンカー検証モード (既存)
 # ---------------------------------------------------------------------------
 
-def _run_single_verify(tx_hash: str, cid_arg: str | None, xrpl_node: str, ipfs_gateway: str) -> None:
+def _run_single_verify(
+    tx_hash: str,
+    cid_arg: str | None,
+    xrpl_node: str,
+    ipfs_gateway: str,
+    payload_file: str | None = None,
+) -> None:
     """単一 @xrpl_anchor / anchor_run_end のトランザクションを検証する。"""
 
     _sep()
@@ -174,26 +180,50 @@ def _run_single_verify(tx_hash: str, cid_arg: str | None, xrpl_node: str, ipfs_g
     print(f"  commit_hash   : {commit_hash_onchain}")
     print(f"  IPFS CID      : {cid_onchain or '(なし)'}")
 
-    # Step 3: IPFS からペイロードを取得
+    # Step 3: ペイロード取得 (--payload ファイル優先、次に IPFS)
     print()
     _sep("-")
-    target_cid = cid_arg or cid_onchain
-    if not target_cid:
-        print("  [ERROR] CID が指定されておらず、オンチェーンにも CID が存在しません。")
-        print("  --cid で指定するか、IPFS 付きでアンカリングしてください。")
-        sys.exit(1)
 
-    ipfs_url = f"{ipfs_gateway.rstrip('/')}/{target_cid}"
-    print(f"  IPFS URL : {ipfs_url}")
+    if payload_file:
+        # --payload FILE が指定されている場合は IPFS 不要
+        try:
+            payload = json.loads(Path(payload_file).read_text())
+            print(f"  Payload : {payload_file} (ローカルファイル)")
+        except Exception as e:
+            print(f"  [ERROR] payload ファイルの読み込みに失敗: {e}")
+            sys.exit(1)
+    else:
+        target_cid = cid_arg or cid_onchain
+        if not target_cid:
+            print("  [ERROR] ペイロードの取得方法が指定されていません。")
+            print("  以下のいずれかを指定してください:")
+            print("    --payload payload.json  (アンカリング時に保存したファイル)")
+            print("    --cid <CID>             (IPFS CID、daemon が必要)")
+            sys.exit(1)
 
-    try:
-        resp = requests.get(ipfs_url, timeout=15)
-        resp.raise_for_status()
-        payload = resp.json()
-    except Exception as e:
-        print(f"  [ERROR] IPFS からの取得に失敗: {e}")
-        print("  ipfs daemon が起動しているか確認してください。")
-        sys.exit(1)
+        ipfs_url = f"{ipfs_gateway.rstrip('/')}/{target_cid}"
+        print(f"  IPFS URL : {ipfs_url}")
+
+        try:
+            resp = requests.get(ipfs_url, timeout=15)
+            resp.raise_for_status()
+            payload = resp.json()
+        except requests.ConnectionError:
+            print()
+            print("  [ERROR] IPFS daemon に接続できません。")
+            print("  ペイロードはローカル IPFS ノードにのみ存在するため、公開ゲートウェイでは取得できません。")
+            print()
+            print("  解決策:")
+            print("    1. ローカル IPFS daemon を起動して再実行:  ipfs daemon &")
+            print("    2. --payload でペイロード JSON を直接渡す:")
+            print("       python verify_demo.py --tx <TX> --payload payload.json")
+            print()
+            print("  IncrementalAnchor の検証 (IPFS 不要) は --chain を使用:")
+            print("    python verify_demo.py --chain --proof demo_proof.json")
+            sys.exit(1)
+        except Exception as e:
+            print(f"  [ERROR] IPFS からの取得に失敗: {e}")
+            sys.exit(1)
 
     print()
     print("  ペイロード:")
@@ -239,6 +269,10 @@ def main() -> None:
     )
     parser.add_argument("--tx", metavar="TX_HASH", help="単一アンカーの XRPL tx hash")
     parser.add_argument("--cid", metavar="CID", help="IPFS CID (省略時はオンチェーンの値を使用)")
+    parser.add_argument(
+        "--payload", metavar="FILE",
+        help="ペイロード JSON ファイル (IPFS 不要; アンカリング時に保存したファイルを渡す)",
+    )
     parser.add_argument("--xrpl-node", default=XRPL_TESTNET_URL, help="XRPL ノード URL")
     parser.add_argument(
         "--ipfs-gateway", default="http://127.0.0.1:8080/ipfs",
@@ -264,6 +298,7 @@ def main() -> None:
             cid_arg=args.cid,
             xrpl_node=args.xrpl_node,
             ipfs_gateway=args.ipfs_gateway,
+            payload_file=args.payload,
         )
 
 
