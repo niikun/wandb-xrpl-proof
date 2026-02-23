@@ -8,7 +8,20 @@ version = "0.2.0"
 description = "Cryptographic anchoring of W&B runs to XRPL using canonical hashing and Merkle proofs"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
+keywords = ["wandb", "xrpl", "weave", "ipfs", "blockchain", "provenance", "ml"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
 dependencies = [
     "xrpl-py>=2.0",
     "wandb>=0.16",

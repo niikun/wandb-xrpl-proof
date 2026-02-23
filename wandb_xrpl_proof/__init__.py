@@ -9,6 +9,8 @@ Public API:
 - build_merkle_tree: Merkle root from history chunks
 """
 
+__version__ = "0.2.0"
+
 from wandb_xrpl_proof.anchor import build_payload, xrpl_anchor
 from wandb_xrpl_proof.canonicalize import canonicalize
 from wandb_xrpl_proof.hash import compute_hash
