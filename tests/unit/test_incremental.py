@@ -435,6 +435,78 @@ class TestRecord:
         result = anchor.record({"step": 0})
         assert result is None
 
+    def test_chunk_hashes_populated_on_success(self):
+        """チェックポイント成功時に chunk_hashes が蓄積される。"""
+        from wandb_xrpl_proof.incremental import IncrementalAnchor
+        run = _make_run()
+        rows = _make_rows(5)
+        fake_tx = "E" * 64
+
+        anchor = IncrementalAnchor(run=run, chunk_size=5)
+        with patch("wandb_xrpl_proof.incremental.submit_anchor", return_value=fake_tx):
+            with patch.dict("os.environ", {"XRPL_WALLET_SEED": "sTest"}):
+                for row in rows:
+                    anchor.record(row)
+
+        assert len(anchor.chunk_hashes) == 1
+        # chunk_hash は canonicalize(rows) の SHA-256 と一致する
+        expected = compute_hash(canonicalize(rows))
+        assert anchor.chunk_hashes[0] == expected
+
+    def test_chunk_hashes_len_matches_tx_hashes(self):
+        """chunk_hashes と tx_hashes の長さが常に一致する。"""
+        from wandb_xrpl_proof.incremental import IncrementalAnchor
+        run = _make_run()
+        call_count = 0
+
+        def fake_submit(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            return "F" * 64
+
+        anchor = IncrementalAnchor(run=run, chunk_size=3)
+        with patch("wandb_xrpl_proof.incremental.submit_anchor", side_effect=fake_submit):
+            with patch.dict("os.environ", {"XRPL_WALLET_SEED": "sTest"}):
+                for row in _make_rows(9):  # 3 チェックポイント
+                    anchor.record(row)
+
+        assert len(anchor.chunk_hashes) == len(anchor.tx_hashes) == 3
+
+    def test_chunk_hashes_empty_on_submit_failure(self):
+        """XRPL 送信失敗時は chunk_hashes に追加しない。"""
+        from wandb_xrpl_proof.incremental import IncrementalAnchor
+        anchor = IncrementalAnchor(run=_make_run(), chunk_size=5)
+        with patch("wandb_xrpl_proof.incremental.submit_anchor", side_effect=Exception("net")):
+            with patch.dict("os.environ", {"XRPL_WALLET_SEED": "sTest"}):
+                for row in _make_rows(5):
+                    anchor.record(row)
+        assert anchor.chunk_hashes == []
+
+    def test_chunk_hashes_consistent_with_chain(self):
+        """chunk_hashes[i] から chain_hash を再計算すると on-chain 値と一致する。"""
+        from wandb_xrpl_proof.incremental import IncrementalAnchor
+        from wandb_xrpl_proof.hash import compute_chain_step
+        run = _make_run()
+        committed_memos = []
+
+        def fake_submit(**kwargs):
+            committed_memos.append(dict(kwargs["memo"]))
+            return ("G" * 64) if len(committed_memos) == 1 else ("H" * 64)
+
+        anchor = IncrementalAnchor(run=run, chunk_size=4)
+        with patch("wandb_xrpl_proof.incremental.submit_anchor", side_effect=fake_submit):
+            with patch.dict("os.environ", {"XRPL_WALLET_SEED": "sTest"}):
+                for row in _make_rows(8):  # 2 チェックポイント
+                    anchor.record(row)
+
+        chunk_hashes = anchor.chunk_hashes
+        assert len(chunk_hashes) == 2
+
+        rolling = None
+        for i, memo in enumerate(committed_memos):
+            rolling = compute_chain_step(rolling, chunk_hashes[i])
+            assert rolling == memo["commit_hash"], f"chain mismatch at seq={i}"
+
 
 # ---------------------------------------------------------------------------
 # TestLog

@@ -1,0 +1,14 @@
+{
+  "final_tx_hash": "DE66A9676EB4195BB3EA3BDAC1EBD94341CAE702BE77A4C667B131865CFB3A77",
+  "tx_hashes": [
+    "24BC0E4796E1F45F89CFDC08CB3406534FC2A9F071CE101804A51F53520C80E7",
+    "DE66A9676EB4195BB3EA3BDAC1EBD94341CAE702BE77A4C667B131865CFB3A77"
+  ],
+  "chunk_hashes": [
+    "a67b23051afe102fdacc3f044fe5480efb320ec42267705cbb0bad3adbe1f1f8",
+    "d0cc3257adb81fda7f8596b34fe949bf51e685876d32619a818246db3d9780fd"
+  ],
+  "samples": 5,
+  "chunk_size": 3,
+  "wandb_run_url": "https://wandb.ai/niikun0209-private/wandb-xrpl-proof-demo/runs/2ml6p9ln"
+}

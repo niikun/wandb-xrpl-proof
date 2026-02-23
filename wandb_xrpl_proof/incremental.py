@@ -146,6 +146,7 @@ class IncrementalAnchor:
         self._prev_tx_hash: str | None = None
         self._seq: int = 0
         self._tx_hashes: list[str] = []
+        self._chunk_hashes: list[str] = []
         self._closed: bool = False
         self._lock = threading.Lock()
 
@@ -257,6 +258,16 @@ class IncrementalAnchor:
             return list(self._tx_hashes)
 
     @property
+    def chunk_hashes(self) -> list[str]:
+        """送信済み全チェックポイントのチャンクデータ SHA-256 リスト（時系列順）。
+
+        verify_chain(final_tx_hash, chunk_hashes=anchor.chunk_hashes) に渡すことで
+        hash chain を再計算してオンチェーン値と照合できる。
+        """
+        with self._lock:
+            return list(self._chunk_hashes)
+
+    @property
     def seq(self) -> int:
         """次に送信されるチェックポイントの seq 番号。"""
         with self._lock:
@@ -284,6 +295,7 @@ class IncrementalAnchor:
                 self._prev_tx_hash = tx
                 self._seq += 1
                 self._tx_hashes.append(tx)
+                self._chunk_hashes.append(chunk_hash)
             try:
                 self._run.summary["xrpl_checkpoint_txs"] = list(self._tx_hashes)
             except Exception:

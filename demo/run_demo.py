@@ -10,9 +10,13 @@ IncrementalAnchor を使い、metrics + Weave trace 入出力ハッシュを
     WANDB_API_KEY    : W&B API キー
 
 実行:
-    python run_demo.py
+    python run_demo.py                     # デフォルト: 5 samples, chunk_size=3
+    python run_demo.py --samples 12 --chunk-size 5
 """
 
+import argparse
+import itertools
+import json
 import os
 import sys
 from pathlib import Path
@@ -25,7 +29,6 @@ import wandb
 
 from wandb_xrpl_proof import IncrementalAnchor
 
-CHUNK_SIZE = 3
 
 # ---------------------------------------------------------------------------
 # 評価関数 — @weave.op() でトレース
@@ -79,11 +82,16 @@ EVAL_DATASET = [
 ]
 
 
+def _generate_samples(n: int) -> list[dict]:
+    """EVAL_DATASET を循環させて n 件のサンプルを生成する。"""
+    return list(itertools.islice(itertools.cycle(EVAL_DATASET), n))
+
+
 # ---------------------------------------------------------------------------
 # 表示ユーティリティ
 # ---------------------------------------------------------------------------
 
-W = 62  # separator width
+W = 62
 
 
 def _sep(char: str = "=") -> None:
@@ -145,6 +153,7 @@ def _print_summary(
     run: "wandb.sdk.wandb_run.Run",
     weave_project_url: str,
     checkpoint_txs: list[str],
+    proof_path: Path,
 ) -> None:
     print()
     _sep()
@@ -154,6 +163,7 @@ def _print_summary(
     print(f"  W&B Run      : https://wandb.ai/{run.entity}/{run.project}/runs/{run.id}")
     print(f"  Weave UI     : {weave_project_url}")
     print(f"  Checkpoints  : {len(checkpoint_txs)} tx")
+    print(f"  Proof file   : {proof_path}")
     print()
 
     if checkpoint_txs:
@@ -166,7 +176,7 @@ def _print_summary(
                 print(f"          |")
         print()
         print(f"  検証コマンド:")
-        print(f"    python verify_demo.py --tx {checkpoint_txs[-1]}")
+        print(f"    python verify_demo.py --chain --proof {proof_path.name}")
         print()
 
 
@@ -175,9 +185,24 @@ def _print_summary(
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="wandb-xrpl-proof デモ")
+    parser.add_argument(
+        "--samples", "-n",
+        type=int, default=5, metavar="N",
+        help="評価サンプル数 (デフォルト: 5, EVAL_DATASET を循環)",
+    )
+    parser.add_argument(
+        "--chunk-size", "-c",
+        type=int, default=3, metavar="K",
+        help="チェックポイント 1 つあたりのステップ数 (デフォルト: 3)",
+    )
+    args = parser.parse_args()
+
     if not os.environ.get("XRPL_WALLET_SEED"):
         print("[ERROR] XRPL_WALLET_SEED が設定されていません。../.env を確認してください。")
         sys.exit(1)
+
+    samples = _generate_samples(args.samples)
 
     # Step 1: 初期化
     weave.init("wandb-xrpl-proof-demo")
@@ -186,7 +211,8 @@ def main() -> None:
         config={
             "model": "demo-llm-v1",
             "evaluator": "f1-overlap",
-            "dataset_size": len(EVAL_DATASET),
+            "dataset_size": args.samples,
+            "chunk_size": args.chunk_size,
         },
         tags=["xrpl-anchor", "weave", "incremental"],
     )
@@ -195,12 +221,11 @@ def main() -> None:
     _print_header(run, weave_project_url)
 
     # Step 2: 評価ループ
-    _print_loop_header(len(EVAL_DATASET), CHUNK_SIZE)
+    _print_loop_header(len(samples), args.chunk_size)
 
-    anchor = IncrementalAnchor(run, chunk_size=CHUNK_SIZE)
+    anchor = IncrementalAnchor(run, chunk_size=args.chunk_size)
 
-    for i, sample in enumerate(EVAL_DATASET):
-        # evaluate_response.call() → (output, Call) を返す
+    for i, sample in enumerate(samples):
         result, weave_call = evaluate_response.call(
             prompt=sample["prompt"],
             response=sample["response"],
@@ -212,9 +237,8 @@ def main() -> None:
         except Exception:
             weave_ui = weave_project_url
 
-        _print_step(i, len(EVAL_DATASET), sample, result, weave_ui)
+        _print_step(i, len(samples), sample, result, weave_ui)
 
-        # metrics + Weave Call をバッファへ (chunk_size=3 で自動送信)
         tx = anchor.log(
             {
                 "step": i,
@@ -237,9 +261,20 @@ def main() -> None:
         prev_tx = anchor.tx_hashes[-2] if len(anchor.tx_hashes) >= 2 else None
         _print_checkpoint(seq, final_tx, prev_tx, is_final=True)
 
-    # サマリ
+    # proof ファイル保存 (verify_demo.py --chain で使用)
     checkpoint_txs = run.summary.get("xrpl_checkpoint_txs", [])
-    _print_summary(run, weave_project_url, checkpoint_txs)
+    proof = {
+        "final_tx_hash": checkpoint_txs[-1] if checkpoint_txs else None,
+        "tx_hashes": checkpoint_txs,
+        "chunk_hashes": anchor.chunk_hashes,
+        "samples": args.samples,
+        "chunk_size": args.chunk_size,
+        "wandb_run_url": f"https://wandb.ai/{run.entity}/{run.project}/runs/{run.id}",
+    }
+    proof_path = Path(__file__).parent / "demo_proof.json"
+    proof_path.write_text(json.dumps(proof, indent=2))
+
+    _print_summary(run, weave_project_url, checkpoint_txs, proof_path)
 
     wandb.finish()
 
