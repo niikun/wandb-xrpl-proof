@@ -73,11 +73,22 @@ def xrpl_anchor(
             # Weave op (.call 属性を持つ) なら call() で実行してトレース ID を取得する
             weave_call_id: str | None = None
             weave_ui_url: str | None = None
+            weave_input_hash: str | None = None
+            weave_output_hash: str | None = None
             if hasattr(func, "call"):
                 result, weave_call = func.call(*args, **kwargs)
                 try:
                     weave_call_id = str(weave_call.id)
                     weave_ui_url = weave_call.ui_url
+                except Exception:
+                    pass
+                try:
+                    weave_input_hash = compute_hash(canonicalize(dict(weave_call.inputs)))
+                except Exception:
+                    pass
+                try:
+                    if weave_call.output is not None:
+                        weave_output_hash = compute_hash(canonicalize(weave_call.output))
                 except Exception:
                     pass
             else:
@@ -96,6 +107,8 @@ def xrpl_anchor(
                     ipfs_api_env=ipfs_api_env,
                     weave_call_id=weave_call_id,
                     weave_ui_url=weave_ui_url,
+                    weave_input_hash=weave_input_hash,
+                    weave_output_hash=weave_output_hash,
                 )
 
             elif mode == "per_run" and not _atexit_registered:
@@ -137,6 +150,8 @@ def _anchor_current_run(
     run: "wandb.sdk.wandb_run.Run | None" = None,
     weave_call_id: str | None = None,
     weave_ui_url: str | None = None,
+    weave_input_hash: str | None = None,
+    weave_output_hash: str | None = None,
 ) -> None:
     """現在の W&B run をアンカリングする。失敗しても例外を伝播しない (Section 13)。"""
     target_run = run or wandb.run
@@ -154,6 +169,8 @@ def _anchor_current_run(
             summary_allowlist=summary_allowlist,
             config_allowlist=config_allowlist,
             weave_call_id=weave_call_id,
+            weave_input_hash=weave_input_hash,
+            weave_output_hash=weave_output_hash,
         )
 
         # 正規化 & ハッシュ (Section 5, 6)
@@ -215,6 +232,8 @@ def build_payload(
     config_allowlist: list[str] | None = None,
     history_chunks: list[dict] | None = None,
     weave_call_id: str | None = None,
+    weave_input_hash: str | None = None,
+    weave_output_hash: str | None = None,
 ) -> dict:
     """
     W&B run からアンカリングペイロードを組み立てる。
@@ -230,6 +249,8 @@ def build_payload(
         config_allowlist: 含める config キー (None = 全て)
         history_chunks: Merkle ツリー用の history チャンク
         weave_call_id: Weave トレース call ID (文字列、省略可)
+        weave_input_hash: sha256(canonicalize(call.inputs)) (省略可)
+        weave_output_hash: sha256(canonicalize(call.output)) (省略可)
 
     Returns:
         正規化前のペイロード辞書
@@ -242,6 +263,10 @@ def build_payload(
     }
     if weave_call_id:
         payload["weave_call_id"] = weave_call_id
+    if weave_input_hash:
+        payload["weave_input_hash"] = weave_input_hash
+    if weave_output_hash:
+        payload["weave_output_hash"] = weave_output_hash
 
     if include_summary and run.summary:
         summary = dict(run.summary)

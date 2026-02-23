@@ -1,8 +1,8 @@
 """
-Demo: Weave × XRPL Anchoring
+Demo: Weave x XRPL Anchoring
 
 @weave.op() でトレースした LLM 評価ログを XRPL ブロックチェーンに刻むデモ。
-IncrementalAnchor を使い、metrics + Weave trace 入出力ハッシュ + tool call サマリを
+IncrementalAnchor を使い、metrics + Weave trace 入出力ハッシュを
 一本の hash chain で XRPL に記録する。
 
 必要な環境変数 (../.env に記述):
@@ -25,6 +25,7 @@ import wandb
 
 from wandb_xrpl_proof import IncrementalAnchor
 
+CHUNK_SIZE = 3
 
 # ---------------------------------------------------------------------------
 # 評価関数 — @weave.op() でトレース
@@ -78,94 +79,167 @@ EVAL_DATASET = [
 ]
 
 
-def _section(title: str) -> None:
-    print(f"\n{'='*60}")
-    print(f"  {title}")
-    print(f"{'='*60}")
+# ---------------------------------------------------------------------------
+# 表示ユーティリティ
+# ---------------------------------------------------------------------------
 
+W = 62  # separator width
+
+
+def _sep(char: str = "=") -> None:
+    print(char * W)
+
+
+def _print_header(run: "wandb.sdk.wandb_run.Run", weave_project_url: str) -> None:
+    _sep()
+    print("  wandb-xrpl-proof  |  Weave x XRPL Anchoring Demo")
+    _sep()
+    print()
+    print("  Pipeline:")
+    print("    @weave.op()  -->  metrics + trace  -->  hash chain  -->  XRPL")
+    print()
+    print(f"  W&B Run  : https://wandb.ai/{run.entity}/{run.project}/runs/{run.id}")
+    print(f"  Weave UI : {weave_project_url}")
+    print()
+
+
+def _print_loop_header(total: int, chunk_size: int) -> None:
+    _sep("-")
+    print(f"  評価開始: {total} samples, chunk_size={chunk_size}")
+    print(f"  各チェックポイントに含まれるデータ:")
+    print(f"    metrics : f1 / precision / recall / step")
+    print(f"    Weave   : call_id / input_hash / output_hash / op_name")
+    _sep("-")
+
+
+def _print_step(
+    idx: int,
+    total: int,
+    sample: dict,
+    result: dict,
+    weave_ui: str,
+) -> None:
+    prompt_short = sample["prompt"]
+    if len(prompt_short) > 48:
+        prompt_short = prompt_short[:45] + "..."
+    print()
+    print(f"  [{idx + 1}/{total}] \"{prompt_short}\"")
+    print(f"        F1={result['f1']:.4f}  Prec={result['precision']:.4f}  Recall={result['recall']:.4f}")
+    print(f"        Weave : {weave_ui}")
+
+
+def _print_checkpoint(seq: int, tx: str, prev_tx: str | None, is_final: bool = False) -> None:
+    kind = "genesis" if seq == 0 else "chained"
+    label = " (final)" if is_final else ""
+    print()
+    print(f"  +-- CHECKPOINT #{seq} [{kind}]{label} " + "-" * max(0, W - 22 - len(kind) - len(label)) + "+")
+    if seq == 0:
+        print(f"  |  wandb_run_path をオンチェーンに刻みました")
+    elif prev_tx:
+        print(f"  |  prev : {prev_tx[:24]}...")
+    print(f"  |  XRPL : https://testnet.xrpl.org/transactions/{tx}")
+    print(f"  +" + "-" * (W - 2) + "+")
+
+
+def _print_summary(
+    run: "wandb.sdk.wandb_run.Run",
+    weave_project_url: str,
+    checkpoint_txs: list[str],
+) -> None:
+    print()
+    _sep()
+    print("  証跡の記録が完了しました")
+    _sep()
+    print()
+    print(f"  W&B Run      : https://wandb.ai/{run.entity}/{run.project}/runs/{run.id}")
+    print(f"  Weave UI     : {weave_project_url}")
+    print(f"  Checkpoints  : {len(checkpoint_txs)} tx")
+    print()
+
+    if checkpoint_txs:
+        print("  Hash chain (oldest --> newest):")
+        for j, tx in enumerate(checkpoint_txs):
+            kind = "genesis" if j == 0 else "chained"
+            suffix = "  <-- final" if j == len(checkpoint_txs) - 1 else ""
+            print(f"    [{j}] {kind:7}  https://testnet.xrpl.org/transactions/{tx}{suffix}")
+            if j < len(checkpoint_txs) - 1:
+                print(f"          |")
+        print()
+        print(f"  検証コマンド:")
+        print(f"    python verify_demo.py --tx {checkpoint_txs[-1]}")
+        print()
+
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
 
 def main() -> None:
     if not os.environ.get("XRPL_WALLET_SEED"):
         print("[ERROR] XRPL_WALLET_SEED が設定されていません。../.env を確認してください。")
         sys.exit(1)
 
-    # ---------------------------------------------------------------------------
-    # Step 1: W&B + Weave を初期化
-    # ---------------------------------------------------------------------------
-    _section("Step 1: W&B + Weave を初期化")
-
+    # Step 1: 初期化
     weave.init("wandb-xrpl-proof-demo")
     run = wandb.init(
         project="wandb-xrpl-proof-demo",
-        config={"model": "demo-llm-v1", "evaluator": "f1-overlap",
-                "dataset_size": len(EVAL_DATASET)},
+        config={
+            "model": "demo-llm-v1",
+            "evaluator": "f1-overlap",
+            "dataset_size": len(EVAL_DATASET),
+        },
         tags=["xrpl-anchor", "weave", "incremental"],
     )
 
     weave_project_url = f"https://wandb.ai/{run.entity}/weave/{run.project}"
-    print(f"  W&B Run  : https://wandb.ai/{run.entity}/{run.project}/runs/{run.id}")
-    print(f"  Weave UI : {weave_project_url}")
+    _print_header(run, weave_project_url)
 
-    # ---------------------------------------------------------------------------
-    # Step 2: IncrementalAnchor で評価ループ実行
-    #   evaluate_response.call() で Weave Call オブジェクトを取得し、
-    #   anchor.log(metrics, weave_call=call) で metrics + trace を同じチャンクへ
-    # ---------------------------------------------------------------------------
-    _section("Step 2: IncrementalAnchor + Weave trace でアンカーしながら評価")
+    # Step 2: 評価ループ
+    _print_loop_header(len(EVAL_DATASET), CHUNK_SIZE)
 
-    print("  各チャンク行に含まれるフィールド:")
-    print("    metrics           : f1, precision, recall, step")
-    print("    weave_call_id     : Weave trace ID")
-    print("    weave_op_name     : 評価 op 名")
-    print("    weave_input_hash  : sha256(canonicalize(inputs))")
-    print("    weave_output_hash : sha256(canonicalize(output))")
+    anchor = IncrementalAnchor(run, chunk_size=CHUNK_SIZE)
 
-    with IncrementalAnchor(run, chunk_size=3) as anchor:
-        for i, sample in enumerate(EVAL_DATASET):
-            # evaluate_response.call() → (output, Call) を返す
-            result, weave_call = evaluate_response.call(
-                prompt=sample["prompt"],
-                response=sample["response"],
-                reference=sample["reference"],
-            )
+    for i, sample in enumerate(EVAL_DATASET):
+        # evaluate_response.call() → (output, Call) を返す
+        result, weave_call = evaluate_response.call(
+            prompt=sample["prompt"],
+            response=sample["response"],
+            reference=sample["reference"],
+        )
 
-            # metrics + Weave Call をまとめてバッファへ (chunk_size=3 で自動送信)
-            tx = anchor.log(
-                {"step": i, "f1": result["f1"],
-                 "precision": result["precision"], "recall": result["recall"]},
-                weave_call=weave_call,
-            )
+        try:
+            weave_ui = weave_call.ui_url
+        except Exception:
+            weave_ui = weave_project_url
 
-            try:
-                weave_ui = weave_call.ui_url
-            except Exception:
-                weave_ui = weave_project_url
+        _print_step(i, len(EVAL_DATASET), sample, result, weave_ui)
 
-            print(f"\n  [{i+1}/{len(EVAL_DATASET)}] F1={result['f1']:.4f}")
-            print(f"    Weave trace : {weave_ui}")
-            if tx:
-                print(f"    XRPL tx     : https://testnet.xrpl.org/transactions/{tx}")
+        # metrics + Weave Call をバッファへ (chunk_size=3 で自動送信)
+        tx = anchor.log(
+            {
+                "step": i,
+                "f1": result["f1"],
+                "precision": result["precision"],
+                "recall": result["recall"],
+            },
+            weave_call=weave_call,
+        )
 
-    # ---------------------------------------------------------------------------
-    # 完了サマリ
-    # ---------------------------------------------------------------------------
-    _section("完了: 証跡の記録が完了しました")
+        if tx:
+            seq = anchor.seq - 1
+            prev_tx = anchor.tx_hashes[-2] if len(anchor.tx_hashes) >= 2 else None
+            _print_checkpoint(seq, tx, prev_tx, is_final=False)
 
+    # 残余チャンクをフラッシュして最終アンカー
+    final_tx = anchor.close()
+    if final_tx:
+        seq = anchor.seq - 1
+        prev_tx = anchor.tx_hashes[-2] if len(anchor.tx_hashes) >= 2 else None
+        _print_checkpoint(seq, final_tx, prev_tx, is_final=True)
+
+    # サマリ
     checkpoint_txs = run.summary.get("xrpl_checkpoint_txs", [])
-    print(f"""
-  W&B Run      : https://wandb.ai/{run.entity}/{run.project}/runs/{run.id}
-  Weave UI     : {weave_project_url}
-  Checkpoints  : {len(checkpoint_txs)} tx
-""")
-
-    for j, tx in enumerate(checkpoint_txs):
-        print(f"  [{j}] https://testnet.xrpl.org/transactions/{tx}")
-
-    if checkpoint_txs:
-        print(f"""
-  検証コマンド:
-    python verify_demo.py --tx {checkpoint_txs[-1]}
-""")
+    _print_summary(run, weave_project_url, checkpoint_txs)
 
     wandb.finish()
 

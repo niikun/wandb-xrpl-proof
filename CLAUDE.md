@@ -15,7 +15,7 @@ pytest tests/unit/ -v
 pytest tests/integration/ -v
 
 # Single test
-pytest tests/unit/test_incremental.py::TestExtractTraceFields::test_extracts_call_id -v
+pytest tests/unit/test_anchor.py::TestBuildPayloadWeaveHashes::test_both_hashes_included -v
 
 # All tests
 pytest -v
@@ -40,7 +40,7 @@ Weave op → W&B Run → Canonicalize → SHA-256 / Merkle Root → (IPFS) → X
 | `merkle.py` | `split_history()` + `build_merkle_tree()` — 1000-step chunks, binary tree with odd-leaf duplication |
 | `xrpl_client.py` | `submit_anchor()` / `fetch_transaction()` / `decode_memo()` — uses `AccountSet` (not `Payment`) because xrpl-py v2+ forbids self-payment; `Tx` response wraps fields under `tx_json` |
 | `ipfs.py` | `upload_to_ipfs()` / `fetch_from_ipfs()` — upload uses Kubo HTTP API (`IPFS_API_URL`); fetch uses HTTP gateway (`IPFS_GATEWAY_URL`); configured separately because they have different availability requirements |
-| `anchor.py` | `@xrpl_anchor` decorator + `build_payload()` + `anchor_run_end()` — orchestrates the single-anchor pipeline; `mode="per_run"` registers via `atexit`; when wrapping a `@weave.op()`, calls `func.call()` to capture `weave_call_id` and `weave_ui_url`; failures logged to `run.summary["xrpl_anchor_error"]`, never raised |
+| `anchor.py` | `@xrpl_anchor` decorator + `build_payload()` + `anchor_run_end()` — orchestrates the single-anchor pipeline; `mode="per_run"` registers via `atexit`; when wrapping a `@weave.op()`, calls `func.call()` to capture `weave_call_id`, `weave_ui_url`, `weave_input_hash` (`sha256(canonicalize(call.inputs))`), and `weave_output_hash` (`sha256(canonicalize(call.output))`); failures logged to `run.summary["xrpl_anchor_error"]`, never raised |
 | `incremental.py` | `IncrementalAnchor` — mid-run checkpointing via hash chain; `record(data, weave_call=None)` / `log(data, weave_call=None)` push rows into a local buffer; `_extract_trace_fields(call)` pulls Weave input/output hashes, op name, and tool call summary from the Call object; `close()` flushes any partial chunk |
 | `verify.py` | `verify_anchor(tx_hash, payload)` — fetches XRPL tx, decodes memo, recomputes hash, returns `VerificationResult`; `verify_chain(final_tx_hash, chunk_hashes?)` — walks `prev` links back to seq=0, verifies seq continuity, prev-link integrity, schema_version, and optionally hash chain values |
 
@@ -74,7 +74,7 @@ Weave op → W&B Run → Canonicalize → SHA-256 / Merkle Root → (IPFS) → X
 }
 ```
 
-The off-chain payload (stored in IPFS or held locally) is the full object including `summary`, `config`, `history_root`, `weave_call_id`, etc.
+The off-chain payload (stored in IPFS or held locally) is the full object including `summary`, `config`, `history_root`, `weave_call_id`, `weave_input_hash`, `weave_output_hash`, etc.
 
 ### Key design constraints
 

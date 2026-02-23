@@ -50,7 +50,7 @@ cp .env.example .env
 
 ### 1. `@xrpl_anchor` — run 終了時に 1 回アンカー
 
-`@weave.op()` と重ねると Weave trace ID も自動でペイロードに含まれる。
+`@weave.op()` と重ねると Weave trace ID・**入出力ハッシュ**も自動でペイロードに含まれる。
 
 ```python
 import weave, wandb
@@ -67,9 +67,20 @@ def evaluate(prompt: str, response: str) -> dict:
 
 with wandb.init(project="my-project"):
     evaluate(prompt="...", response="...")
-    # → run.summary["xrpl_tx_hash"]  : XRPL tx hash
-    # → run.summary["weave_trace_url"]: Weave UI の直リンク
+    # → run.summary["xrpl_tx_hash"]    : XRPL tx hash
+    # → run.summary["xrpl_commit_hash"] : ペイロードの SHA-256
+    # → run.summary["weave_trace_url"]  : Weave UI の直リンク
 ```
+
+**ペイロードに含まれるフィールド (`@weave.op()` と併用時):**
+
+| フィールド | 内容 |
+|---|---|
+| `weave_call_id` | Weave trace ID |
+| `weave_input_hash` | `sha256(canonicalize(call.inputs))` |
+| `weave_output_hash` | `sha256(canonicalize(call.output))` |
+| `summary` | `summary_allowlist` でフィルタした W&B summary |
+| `config` | `config_allowlist` でフィルタした W&B config |
 
 ### 2. `IncrementalAnchor` — 途中で定期的にアンカー
 
