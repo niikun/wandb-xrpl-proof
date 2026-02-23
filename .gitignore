@@ -1,0 +1,33 @@
+# 環境変数・シークレット (絶対にコミットしない)
+.env
+.env.local
+*.seed
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# W&B
+wandb/
+
+# OS
+.DS_Store
+Thumbs.db
