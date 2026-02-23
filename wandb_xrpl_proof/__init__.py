@@ -7,11 +7,12 @@ Public API:
 - canonicalize: canonical JSON serialization
 - compute_hash: SHA-256 hash of canonical JSON
 - build_merkle_tree: Merkle root from history chunks
+- anchor_run_end: explicit per-run anchoring (alternative to mode="per_run")
 """
 
 __version__ = "0.2.0"
 
-from wandb_xrpl_proof.anchor import build_payload, xrpl_anchor
+from wandb_xrpl_proof.anchor import anchor_run_end, build_payload, xrpl_anchor
 from wandb_xrpl_proof.canonicalize import canonicalize
 from wandb_xrpl_proof.hash import compute_hash
 from wandb_xrpl_proof.merkle import build_merkle_tree, split_history
@@ -19,6 +20,7 @@ from wandb_xrpl_proof.verify import VerificationResult, verify_anchor
 
 __all__ = [
     "xrpl_anchor",
+    "anchor_run_end",
     "verify_anchor",
     "canonicalize",
     "compute_hash",

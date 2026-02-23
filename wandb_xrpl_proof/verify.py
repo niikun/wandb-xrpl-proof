@@ -16,12 +16,15 @@ Match = integrity verified
 """
 
 import logging
+import os
 from dataclasses import dataclass, field
 
 from wandb_xrpl_proof.canonicalize import canonicalize
 from wandb_xrpl_proof.hash import compute_hash
-from wandb_xrpl_proof.ipfs import fetch_from_ipfs
+from wandb_xrpl_proof.ipfs import DEFAULT_IPFS_GATEWAY_URL, fetch_from_ipfs
 from wandb_xrpl_proof.xrpl_client import XRPL_TESTNET_URL, decode_memo, fetch_transaction
+
+_DEFAULT_IPFS_GATEWAY = os.environ.get("IPFS_GATEWAY_URL", DEFAULT_IPFS_GATEWAY_URL)
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +49,7 @@ def verify_anchor(
     tx_hash: str,
     payload: dict | None = None,
     xrpl_node: str = XRPL_TESTNET_URL,
-    ipfs_gateway: str = "https://ipfs.io/ipfs",
+    ipfs_gateway: str = _DEFAULT_IPFS_GATEWAY,
 ) -> VerificationResult:
     """
     XRPL トランザクションのアンカリングを検証する。

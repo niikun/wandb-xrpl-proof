@@ -39,8 +39,8 @@ Weave op → W&B Run → Canonicalize → SHA-256 / Merkle Root → (IPFS) → X
 | `hash.py` | `compute_hash(canonical_json)` — SHA-256, lowercase hex |
 | `merkle.py` | `split_history()` + `build_merkle_tree()` — 1000-step chunks, binary tree with odd-leaf duplication |
 | `xrpl_client.py` | `submit_anchor()` / `fetch_transaction()` / `decode_memo()` — uses `AccountSet` (not `Payment`) because xrpl-py v2+ forbids self-payment; `Tx` response wraps fields under `tx_json` |
-| `ipfs.py` | `upload_to_ipfs()` / `fetch_from_ipfs()` — Kubo-compatible HTTP API |
-| `anchor.py` | `@xrpl_anchor` decorator + `_anchor_current_run()` + `build_payload()` — orchestrates the full pipeline; failures are caught and logged to `run.summary["xrpl_anchor_error"]`, never raised |
+| `ipfs.py` | `upload_to_ipfs()` / `fetch_from_ipfs()` — upload uses Kubo HTTP API (`IPFS_API_URL`); fetch uses HTTP gateway (`IPFS_GATEWAY_URL`); these are configured separately because they have different availability requirements |
+| `anchor.py` | `@xrpl_anchor` decorator + `_anchor_current_run()` + `build_payload()` + `anchor_run_end()` — orchestrates the full pipeline; `mode="per_run"` registers anchoring via `atexit` (not monkey-patching `wandb.finish`); `anchor_run_end(run)` is the explicit alternative; failures are caught and logged to `run.summary["xrpl_anchor_error"]`, never raised |
 | `verify.py` | `verify_anchor(tx_hash, payload)` — fetches XRPL tx, decodes memo, recomputes hash, returns `VerificationResult` |
 
 ### On-chain data format
@@ -49,18 +49,19 @@ Weave op → W&B Run → Canonicalize → SHA-256 / Merkle Root → (IPFS) → X
 
 ```json
 {
-  "schema_version": "a2a-weave-xrpl-0.2",
+  "schema_version": "wandb-xrpl-proof-0.2",
   "wandb_run_path": "entity/project/run_id",
   "commit_hash": "<sha256-hex>",
   "cid": "<ipfs-cid-if-used>"
 }
 ```
 
-The off-chain payload (stored in IPFS or held locally) is the full object including `summary`, `config`, `history_root`, etc., with schema version `"wandb-xrpl-proof-0.2"`.
+The off-chain payload (stored in IPFS or held locally) is the full object including `summary`, `config`, `history_root`, etc., also with schema version `"wandb-xrpl-proof-0.2"`.
 
 ### Key design constraints
 
 - Canonicalization always excludes `_timestamp` and `_runtime` (defined in `canonicalize._UNSTABLE_FIELDS`). Additional keys can be excluded via `exclude_keys`.
 - `summary_allowlist` / `config_allowlist` on `@xrpl_anchor` filter which W&B fields enter the payload — use these to avoid leaking private metrics on-chain.
 - XRPL node defaults to testnet (`https://s.altnet.rippletest.net:51234`). Override with `XRPL_NODE_URL`.
+- IPFS fetch gateway defaults to local daemon (`http://127.0.0.1:8080/ipfs`). Override with `IPFS_GATEWAY_URL` (env var) or pass `ipfs_gateway=` to `verify_anchor()` / `fetch_from_ipfs()`. Alternatives: `https://cloudflare-ipfs.com/ipfs`, Pinata custom gateway.
 - Testnet XRP faucet: https://faucet.altnet.rippletest.net/accounts

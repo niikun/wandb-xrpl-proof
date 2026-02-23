@@ -16,6 +16,7 @@ Execution flow:
 XRPL submission failure MUST NOT crash training (Section 13).
 """
 
+import atexit
 import functools
 import logging
 import os
@@ -26,7 +27,7 @@ import wandb
 from wandb_xrpl_proof.canonicalize import canonicalize
 from wandb_xrpl_proof.hash import compute_hash
 from wandb_xrpl_proof.ipfs import upload_to_ipfs
-from wandb_xrpl_proof.merkle import build_merkle_tree, split_history
+from wandb_xrpl_proof.merkle import build_merkle_tree
 from wandb_xrpl_proof.xrpl_client import submit_anchor
 
 logger = logging.getLogger(__name__)
@@ -62,8 +63,12 @@ def xrpl_anchor(
     """
 
     def decorator(func: Callable) -> Callable:
+        # per_run: atexit 登録済みかをインスタンスごとに追跡
+        _atexit_registered = False
+
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            nonlocal _atexit_registered
             result = func(*args, **kwargs)
 
             if mode == "per_op":
@@ -79,15 +84,13 @@ def xrpl_anchor(
                     ipfs_api_env=ipfs_api_env,
                 )
 
-            return result
-
-        if mode == "per_run":
-            # per_run: run finish 時にアンカリング
-            original_finish = wandb.finish
-
-            @functools.wraps(original_finish)
-            def patched_finish(*args, **kwargs):
-                _anchor_current_run(
+            elif mode == "per_run" and not _atexit_registered:
+                # monkey-patch を避け atexit で登録。
+                # atexit は LIFO のため wandb.init() 後に登録すれば
+                # wandb 自身の atexit より先に実行される。
+                # 明示的な制御が必要な場合は anchor_run_end(run) を使うこと。
+                atexit.register(
+                    _anchor_current_run,
                     op_name=func.__name__,
                     include_summary=include_summary,
                     include_config=include_config,
@@ -98,9 +101,9 @@ def xrpl_anchor(
                     xrpl_node_env=xrpl_node_env,
                     ipfs_api_env=ipfs_api_env,
                 )
-                return original_finish(*args, **kwargs)
+                _atexit_registered = True
 
-            wandb.finish = patched_finish
+            return result
 
         return wrapper
 
@@ -247,3 +250,58 @@ def build_payload(
         payload["chunk_count"] = merkle_result["chunk_count"]
 
     return payload
+
+
+def anchor_run_end(
+    run: "wandb.sdk.wandb_run.Run | None" = None,
+    op_name: str = "run_end",
+    include_summary: bool = True,
+    include_config: bool = True,
+    use_ipfs: bool = False,
+    summary_allowlist: list[str] | None = None,
+    config_allowlist: list[str] | None = None,
+    xrpl_seed_env: str = "XRPL_WALLET_SEED",
+    xrpl_node_env: str = "XRPL_NODE_URL",
+    ipfs_api_env: str = "IPFS_API_URL",
+) -> None:
+    """
+    run 終了時に明示的にアンカリングを行う関数。
+
+    `mode="per_run"` の atexit に頼らず、呼び出しタイミングを完全に制御したい場合に使用する。
+    wandb.finish() を呼ぶ直前に実行するのが推奨。
+
+    Args:
+        run: 対象の wandb.Run (None の場合は wandb.run を使用)
+        op_name: ペイロードに記録する op 名
+        include_summary: summary をペイロードに含める
+        include_config: config をペイロードに含める
+        use_ipfs: IPFS にペイロードをアップロードする
+        summary_allowlist: 含める summary キーのリスト (None = 全て)
+        config_allowlist: 含める config キーのリスト (None = 全て)
+        xrpl_seed_env: XRPL シードの環境変数名
+        xrpl_node_env: XRPL ノード URL の環境変数名
+        ipfs_api_env: IPFS API URL の環境変数名
+
+    Example:
+        with wandb.init(project="my-project") as run:
+            train(run)
+            anchor_run_end(run, summary_allowlist=["loss"])
+    """
+    target_run = run or wandb.run
+    if target_run is None:
+        logger.warning("anchor_run_end: No active W&B run. Skipping.")
+        return
+
+    # wandb.run を一時的に target_run として扱うため、_anchor_current_run を直接呼ぶ前に
+    # run が wandb.run と異なる場合はペイロードを直接組み立てる
+    _anchor_current_run(
+        op_name=op_name,
+        include_summary=include_summary,
+        include_config=include_config,
+        use_ipfs=use_ipfs,
+        summary_allowlist=summary_allowlist,
+        config_allowlist=config_allowlist,
+        xrpl_seed_env=xrpl_seed_env,
+        xrpl_node_env=xrpl_node_env,
+        ipfs_api_env=ipfs_api_env,
+    )

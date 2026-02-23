@@ -14,7 +14,16 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+# アップロード用: Kubo 互換 HTTP API (ipfs daemon が必要)
 DEFAULT_IPFS_API_URL = "http://127.0.0.1:5001"
+
+# 取得用: HTTP ゲートウェイ (ローカル / パブリック)
+# 他の選択肢:
+#   ローカル  : http://127.0.0.1:8080/ipfs
+#   Cloudflare: https://cloudflare-ipfs.com/ipfs
+#   4EVERLAND : https://4everland.io/ipfs
+#   Pinata    : https://<your-gateway>.mypinata.cloud/ipfs
+DEFAULT_IPFS_GATEWAY_URL = "http://127.0.0.1:8080/ipfs"
 
 
 def upload_to_ipfs(payload: dict, api_url: str = DEFAULT_IPFS_API_URL) -> str:
@@ -51,7 +60,7 @@ def upload_to_ipfs(payload: dict, api_url: str = DEFAULT_IPFS_API_URL) -> str:
     return cid
 
 
-def fetch_from_ipfs(cid: str, gateway_url: str = "https://ipfs.io/ipfs") -> dict:
+def fetch_from_ipfs(cid: str, gateway_url: str = DEFAULT_IPFS_GATEWAY_URL) -> dict:
     """
     IPFS ゲートウェイからペイロードを取得して辞書として返す。
 
