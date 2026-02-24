@@ -34,6 +34,78 @@ XRPL のオンチェーンタイムスタンプと SHA-256 ハッシュを組み
 
 ---
 
+## データフロー：何がどこに記録されるか
+
+### `@xrpl_anchor`（run 終了時に 1 回アンカー）
+
+```
+【評価実行時】
+  実際の入力データ  ──→ SHA-256 ──→ weave_input_hash  ──┐
+  実際の出力データ  ──→ SHA-256 ──→ weave_output_hash ──┤
+  W&B summary（allowlist フィルタ済み）──────────────────┤
+  W&B config （allowlist フィルタ済み）──────────────────┤──→ payload（メモリ上）
+  wandb_run_path ─────────────────────────────────────────┤
+  weave_call_id  ─────────────────────────────────────────┘
+                                      │
+                          正規化（canonicalize）+ SHA-256
+                                      │
+                                 commit_hash
+                                      │
+                        ┌─────────────┴──────────────┐
+                        ▼                            ▼（オプション）
+              XRPL AccountSet Memo            payload.json
+          { commit_hash,                  { weave_call_id,
+            wandb_run_path,                 weave_input_hash,
+            schema_version }                weave_output_hash,
+                                            summary, config, ... }
+```
+
+**重要:** 入力・出力の生データ（プロンプトテキスト等）は payload には入らない。入るのは SHA-256 ハッシュのみ。生データは Weave UI に残る。
+
+| 保存先 | 記録されるデータ |
+|---|---|
+| **XRPL（オンチェーン）** | `commit_hash`・`wandb_run_path`・`schema_version` のみ |
+| **`payload.json`（オフチェーン・オプション）** | `weave_call_id`・`weave_input_hash`・`weave_output_hash`・`summary`・`config` |
+| **Weave UI** | 実際の入出力データ（プロンプトテキスト、モデルの応答） |
+| **W&B UI** | メトリクス・config・summary の値 |
+
+---
+
+### `IncrementalAnchor`（chunk_size 行ごとにチェックポイント）
+
+```
+【各評価ステップ】
+  metrics（f1, loss, ...）────────────────────────────────────────────┐
+  実際の入力  ──→ SHA-256 ──→ weave_input_hash                        │
+  実際の出力  ──→ SHA-256 ──→ weave_output_hash ──→ 1行（バッファ）──┤
+  weave_call_id, weave_op_name                                        │
+                                                                      ▼
+                                              【chunk_size 行溜まったら】
+                                                          │
+                                              canonicalize（全行）+ SHA-256
+                                                          │
+                                                     chunk_hash
+                                                          │
+                                    SHA-256（前の chain_hash + chunk_hash）
+                                                          │
+                                                     chain_hash
+                                                          │
+                                              XRPL AccountSet Memo
+                                         seq=0: { commit_hash=chain_hash,
+                                                  wandb_run_path, seq:0 }
+                                         seq≥1: { commit_hash=chain_hash,
+                                                  prev=<前の tx_hash>, seq:N }
+```
+
+| 保存先 | 記録されるデータ |
+|---|---|
+| **XRPL seq=0（genesis）** | `commit_hash`（chain hash）・`wandb_run_path`・`seq:0` |
+| **XRPL seq≥1（chained）** | `commit_hash`（chain hash）・`prev`（前の tx へのリンク）・`seq:N` |
+| **`demo_proof.json`** | `tx_hashes`・`chunk_hashes` — オフラインで chain 検証するために使用 |
+| **Weave UI** | 各ステップの実際の入出力データ |
+
+---
+
 ## Quickstart
 
 ```bash

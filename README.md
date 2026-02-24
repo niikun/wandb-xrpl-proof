@@ -34,6 +34,78 @@ Only a lightweight memo of **≤ 256 bytes** is stored on-chain.
 
 ---
 
+## Data Flow & What Gets Recorded Where
+
+### `@xrpl_anchor` (single anchor per run)
+
+```
+[Evaluation run]
+  Actual input data  ──→ SHA-256 ──→ weave_input_hash  ──┐
+  Actual output data ──→ SHA-256 ──→ weave_output_hash ──┤
+  W&B summary (allowlist filtered) ──────────────────────┤
+  W&B config  (allowlist filtered) ──────────────────────┤──→ payload (in memory)
+  wandb_run_path ─────────────────────────────────────────┤
+  weave_call_id  ─────────────────────────────────────────┘
+                                      │
+                          canonicalize + SHA-256
+                                      │
+                                 commit_hash
+                                      │
+                        ┌─────────────┴──────────────┐
+                        ▼                            ▼ (optional)
+              XRPL AccountSet Memo            payload.json
+          { commit_hash,                  { weave_call_id,
+            wandb_run_path,                 weave_input_hash,
+            schema_version }                weave_output_hash,
+                                            summary, config, ... }
+```
+
+**Key point:** Raw input/output text is never stored in the payload — only their SHA-256 hashes are. The actual content lives in the Weave UI.
+
+| Where | What is stored |
+|---|---|
+| **XRPL (on-chain)** | `commit_hash`, `wandb_run_path`, `schema_version` only |
+| **`payload.json` (off-chain, optional)** | `weave_call_id`, `weave_input_hash`, `weave_output_hash`, `summary`, `config` |
+| **Weave UI** | Actual input/output content (prompt text, model responses) |
+| **W&B UI** | Metrics, config, summary values |
+
+---
+
+### `IncrementalAnchor` (checkpoint every N rows)
+
+```
+[Each evaluation step]
+  metrics (f1, loss, ...)  ──────────────────────────────────────────────┐
+  actual input  ──→ SHA-256 ──→ weave_input_hash                         │
+  actual output ──→ SHA-256 ──→ weave_output_hash  ──→ row (in buffer) ──┤
+  weave_call_id, weave_op_name                                            │
+                                                                          ▼
+                                              [buffer reaches chunk_size rows]
+                                                          │
+                                              canonicalize(all rows) + SHA-256
+                                                          │
+                                                     chunk_hash
+                                                          │
+                                    SHA-256(prev_chain_hash + chunk_hash)
+                                                          │
+                                                     chain_hash
+                                                          │
+                                              XRPL AccountSet Memo
+                                         seq=0: { commit_hash=chain_hash,
+                                                  wandb_run_path, seq:0 }
+                                         seq≥1: { commit_hash=chain_hash,
+                                                  prev=<prev_tx_hash>, seq:N }
+```
+
+| Where | What is stored |
+|---|---|
+| **XRPL seq=0 (genesis)** | `commit_hash` (chain hash), `wandb_run_path`, `seq:0` |
+| **XRPL seq≥1 (chained)** | `commit_hash` (chain hash), `prev` (link to previous tx), `seq:N` |
+| **`demo_proof.json`** | `tx_hashes`, `chunk_hashes` — enables offline chain verification |
+| **Weave UI** | Actual input/output content for each step |
+
+---
+
 ## Quickstart
 
 ```bash
