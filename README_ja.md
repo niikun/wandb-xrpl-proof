@@ -120,6 +120,74 @@ cp .env.example .env
 
 ---
 
+## Weave デモ — OpenAI × Weave × IncrementalAnchor
+
+`demo/weave_demo.py` は、`@weave.op()` 関数に XRPL チェックポイントを追加する最小構成を示したサンプルです。変更点はわずか 3 行です：
+
+```python
+import wandb, weave
+from wandb_xrpl_proof import IncrementalAnchor
+
+weave.init("traces-quickstart")
+run = wandb.init(project="traces-quickstart")   # 1. W&B run を開始
+
+@weave.op()
+def extract_dinos(sentence: str) -> dict:
+    ...  # OpenAI / LLM の呼び出し
+
+with IncrementalAnchor(run, chunk_size=2) as anchor:  # 2. anchor でラップ
+    for i in range(5):
+        result, call = extract_dinos.call(sentence)   # 3. .call() で Weave trace を取得
+        anchor.log({"step": i}, weave_call=call)      #    メトリクスと Weave ハッシュをまとめて記録
+
+# チェックポイントごとに XRPL エクスプローラの URL を表示
+for tx in anchor.tx_hashes:
+    print(f"XRPL testnet: https://testnet.xrpl.org/transactions/{tx}")
+
+run.finish()
+```
+
+**実行:**
+
+```bash
+python demo/weave_demo.py
+# → チェックポイントごとに XRPL testnet の URL を表示
+# → weave_proof.json を保存（検証に使用）
+```
+
+**検証 — prev リンクを辿り hash chain を再計算して改ざんを確認:**
+
+```bash
+python demo/verify_demo.py --chain --proof weave_proof.json
+```
+
+```
+==============================================================
+  wandb-xrpl-proof  |  Hash Chain Verification
+==============================================================
+
+  CHECKPOINT #0 [genesis]  --  OK
+    TX  : https://testnet.xrpl.org/transactions/64DC...
+    on-chain   : abc123...
+    recomputed : abc123...  ==
+
+  CHECKPOINT #1 [chained]  --  OK
+  CHECKPOINT #2 [chained]  --  OK
+
+  RESULT: 3/3 checkpoints VERIFIED
+  Hash chain integrity : CONFIRMED
+```
+
+各ステップで何を検証するか：
+
+| ステップ | 検証内容 |
+|---|---|
+| 1. 収集 | XRPL の `prev` リンクを末尾から genesis まで辿り全チェックポイントを収集 |
+| 2. 構造 | `seq` 連続性（0, 1, 2…）と `prev` が実際の tx hash と一致するか |
+| 3. Hash chain | `SHA-256((chain_{i-1} or "") + chunk_hash_i)` がオンチェーンの `commit_hash` と一致するか |
+
+---
+
 ## 3 つの使い方
 
 ### 1. `@xrpl_anchor` — run 終了時に 1 回アンカー
@@ -314,8 +382,10 @@ wandb_xrpl_proof/
 └── verify.py         # verify_anchor, verify_chain
 
 demo/
+├── weave_demo.py     # Weave × IncrementalAnchor 最小構成デモ (OpenAI + anchor + verify)
 ├── run_demo.py       # IncrementalAnchor × Weave × XRPL デモ (--samples N / --chunk-size K)
-├── verify_demo.py    # 証跡検証 (--chain --proof demo_proof.json / --tx TX_HASH)
+├── verify_demo.py    # 証跡検証 (--chain --proof / --tx TX_HASH)
+├── weave_proof.json  # weave_demo.py が生成する proof ファイル
 └── demo_proof.json   # run_demo.py が生成する proof ファイル (chunk_hashes 含む)
 ```
 

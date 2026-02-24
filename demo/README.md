@@ -76,5 +76,19 @@ python verify_demo.py --tx <TX_HASH> --cid <CID>
 
 | File | Description |
 |------|-------------|
-| `run_demo.py` | メインデモ: Weave トレース → IPFS → XRPL アンカリング |
-| `verify_demo.py` | 検証デモ: XRPL から証跡を取得して整合性を確認 |
+| `weave_demo.py` | 最小構成デモ: `@weave.op()` + `IncrementalAnchor` → XRPL チェックポイント → 検証 |
+| `run_demo.py` | フルデモ: Weave トレース → IPFS → XRPL アンカリング |
+| `verify_demo.py` | 検証: `--chain --proof weave_proof.json` または `--tx TX_HASH` |
+| `weave_proof.json` | `weave_demo.py` が生成する proof ファイル（検証に使用） |
+
+---
+
+## Weave Demo（最小構成）
+
+```bash
+# 実行 → XRPL URL を表示 + weave_proof.json を保存
+python weave_demo.py
+
+# 検証 → hash chain を再計算して改ざんを確認
+python verify_demo.py --chain --proof weave_proof.json
+```
